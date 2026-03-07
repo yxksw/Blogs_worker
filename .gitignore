@@ -1,0 +1,23 @@
+# Wrangler config (contains sensitive database IDs)
+wrangler.toml
+
+# Wrangler local state and credentials cache
+.wrangler/
+wrangler-account.json
+wrangler-account.json*
+
+# Local development env/secrets
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+
+# Local databases and temporary artifacts
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Build output and dependencies (if added later)
+dist/
+node_modules/
