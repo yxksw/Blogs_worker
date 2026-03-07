@@ -2,6 +2,13 @@
 
 一个独立的 Cloudflare Worker 项目，为博客系统提供后端 API。
 
+[![API](https://img.shields.io/badge/API-https://api.danarnoux.com-0f766e?style=for-the-badge&logo=cloudflare&logoColor=white)](https://api.danarnoux.com)
+[![前端](https://img.shields.io/badge/前端-DansBlog-1d4ed8?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlog)
+[![仓库](https://img.shields.io/badge/仓库-DansBlogs_worker-111827?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlogs_worker)
+[![B站](https://img.shields.io/badge/关注-B站-fe738c?style=for-the-badge&logo=bilibili)](https://space.bilibili.com/435440676)
+
+> **前端**: [DansBlog](https://github.com/Dancncn/DansBlog)
+>
 > **English Version**: [View English Documentation](../README.md)
 
 ## 项目概述

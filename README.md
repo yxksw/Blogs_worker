@@ -2,6 +2,13 @@
 
 A standalone Cloudflare Worker project providing backend API for the blog system.
 
+[![API](https://img.shields.io/badge/API-https://api.danarnoux.com-0f766e?style=for-the-badge&logo=cloudflare&logoColor=white)](https://api.danarnoux.com)
+[![Frontend](https://img.shields.io/badge/Frontend-DansBlog-1d4ed8?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlog)
+[![Repository](https://img.shields.io/badge/Repository-DansBlogs_worker-111827?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlogs_worker)
+[![Bilibili](https://img.shields.io/badge/Watch-Bilibili-fe738c?style=for-the-badge&logo=bilibili)](https://space.bilibili.com/435440676)
+
+> **Frontend**: [DansBlog](https://github.com/Dancncn/DansBlog)
+>
 > **中文版**: [查看中文文档](./docs/README.zh-CN.md)
 
 ## Project Overview
