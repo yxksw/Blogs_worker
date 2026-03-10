@@ -58,7 +58,7 @@
 
 ```bash
 # 设置 GitHub OAuth 密钥
-wrangler secret put GITHUB_CLIENT_SECRET
+wrangler secret put GITHUB_CLIENT_SECRET --name blog-worker
 
 # 在 wrangler.toml 中设置非敏感变量
 GITHUB_CLIENT_ID = "your-client-id"
