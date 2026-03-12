@@ -4,6 +4,11 @@ import {
 	type StorageProviderConfig,
 	type UploadResult,
 } from './storage/index.js';
+import {
+	EmailService,
+	createEmailConfigFromEnv,
+	type CommentNotificationData,
+} from './email/index.js';
 
 type D1Statement = {
 	bind(...values: unknown[]): D1Statement;
@@ -82,6 +87,18 @@ type Env = {
 	DEFAULT_STORAGE?: 'r2' | 's3' | 'telegram';
 	// Analytics Engine
 	ANALYTICS?: AnalyticsEngineDataset;
+	// Email notification configuration
+	RESEND_API_KEY?: string;
+	SMTP_HOST?: string;
+	SMTP_PORT?: string;
+	SMTP_USER?: string;
+	SMTP_PASS?: string;
+	SMTP_PROVIDER?: string;
+	EMAIL_FROM?: string;
+	EMAIL_FROM_NAME?: string;
+	EMAIL_TO?: string;
+	NOTIFY_ON_COMMENT?: string;
+	BLOG_BASE_URL?: string;
 };
 
 type AnalyticsEngineDataset = {
@@ -153,12 +170,12 @@ export class RateLimiter {
 }
 
 export default {
-	async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 		const origin = resolveAllowedOrigin(request, env);
 
 		// Initialize storage manager
-		const storageConfig = createStorageConfigFromEnv(env);
+		const storageConfig = createStorageConfigFromEnv(env as unknown as Record<string, string | undefined>);
 		const storageManager = new StorageManager(storageConfig, env.IMAGES);
 
 		if (url.pathname.startsWith('/api/') && request.method === 'OPTIONS') {
@@ -197,7 +214,7 @@ export default {
 					response = await handleCommentsGet(request, env);
 					break;
 				case 'POST /api/comments':
-					response = await handleCommentsPost(request, env);
+					response = await handleCommentsPost(request, env, ctx);
 					break;
 				case 'GET /api/images':
 					response = await handleImageRoute(request, env, storageManager);
@@ -894,10 +911,27 @@ async function handleCommentsGet(request: Request, env: Env): Promise<Response> 
 		}>();
 
 	// Build comment tree structure
-	const commentMap = new Map();
-	const rootComments: typeof comments = [];
+	interface CommentNode {
+		id: string;
+		postSlug: string;
+		parentId: string | null;
+		content: string;
+		status: string;
+		createdAt: number;
+		author: {
+			id: string;
+			username: string;
+			name: string | null;
+			avatar: string | null;
+			profileUrl: string | null;
+		};
+		replies: CommentNode[];
+	}
 
-	const comments = (result.results ?? []).map((row) => ({
+	const commentMap = new Map<string, CommentNode>();
+	const rootComments: CommentNode[] = [];
+
+	const comments: CommentNode[] = (result.results ?? []).map((row) => ({
 		id: row.id,
 		postSlug: row.post_slug,
 		parentId: row.parent_id,
@@ -911,7 +945,7 @@ async function handleCommentsGet(request: Request, env: Env): Promise<Response> 
 			avatar: row.user_avatar_url,
 			profileUrl: row.user_profile_url,
 		},
-		replies: [] as typeof comments,
+		replies: [],
 	}));
 
 	// First pass: map all comments
@@ -934,7 +968,7 @@ async function handleCommentsGet(request: Request, env: Env): Promise<Response> 
 	return json({ comments: rootComments });
 }
 
-async function handleCommentsPost(request: Request, env: Env): Promise<Response> {
+async function handleCommentsPost(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const rate = await checkRateLimit(request, env, 'comment_post');
 	if (rate) return rate;
 
@@ -966,13 +1000,17 @@ async function handleCommentsPost(request: Request, env: Env): Promise<Response>
 
 	const parentId = typeof payload.parent_id === 'string' && payload.parent_id ? payload.parent_id : null;
 
-	// Validate parent comment if provided
+	// Validate parent comment if provided and get parent comment info for notification
+	let parentCommentInfo: { user_id: string; body: string; user_name: string; user_login: string } | null = null;
 	if (parentId) {
 		const parentComment = await env.DB.prepare(
-			`SELECT id, post_slug, status FROM comments WHERE id = ?`
+			`SELECT c.id, c.post_slug, c.status, c.user_id, c.body, u.name as user_name, u.login as user_login
+			 FROM comments c
+			 JOIN users u ON u.id = c.user_id
+			 WHERE c.id = ?`
 		)
 			.bind(parentId)
-			.first<{ id: string; post_slug: string; status: string }>();
+			.first<{ id: string; post_slug: string; status: string; user_id: string; body: string; user_name: string; user_login: string }>();
 
 		if (!parentComment) {
 			return json({ error: 'Parent comment not found' }, 400);
@@ -984,6 +1022,11 @@ async function handleCommentsPost(request: Request, env: Env): Promise<Response>
 
 		if (parentComment.status !== 'approved') {
 			return json({ error: 'Cannot reply to an unapproved comment' }, 400);
+		}
+
+		// Don't notify if replying to own comment
+		if (parentComment.user_id !== session.user_id) {
+			parentCommentInfo = parentComment;
 		}
 	}
 
@@ -1004,6 +1047,54 @@ async function handleCommentsPost(request: Request, env: Env): Promise<Response>
 	)
 		.bind(commentId, post, session.user_id, parentId, body, now, now)
 		.run();
+
+	// Send email notification asynchronously (don't block response)
+	console.log('Email notification check:', { 
+		SMTP_USER: env.SMTP_USER, 
+		SMTP_PASS: env.SMTP_PASS ? '***set***' : '***not set***',
+		NOTIFY_ON_COMMENT: env.NOTIFY_ON_COMMENT 
+	});
+	const emailConfig = createEmailConfigFromEnv(env);
+	console.log('Email config:', emailConfig ? 'configured' : 'not configured');
+	
+	if (emailConfig && env.NOTIFY_ON_COMMENT !== 'false') {
+		console.log('Sending email notification...');
+		const emailService = new EmailService(emailConfig);
+		const baseUrl = env.BLOG_BASE_URL || 'https://blog.261770.xyz';
+
+		const notificationData: CommentNotificationData = {
+			postSlug: post,
+			postUrl: `${baseUrl}/posts/${post}`,
+			commentId,
+			commentContent: body,
+			authorName: session.name || session.login,
+			authorUsername: session.login,
+			authorAvatar: session.avatar_url || undefined,
+			createdAt: now,
+			...(parentCommentInfo ? {
+				parentComment: {
+					authorName: parentCommentInfo.user_name || parentCommentInfo.user_login,
+					content: parentCommentInfo.body,
+				}
+			} : {})
+		};
+
+		// Use waitUntil to ensure email sending completes after response
+		console.log('About to call sendCommentNotification...');
+		ctx.waitUntil(
+			emailService.sendCommentNotification(notificationData)
+				.then(() => {
+					console.log('Email notification sent successfully');
+				})
+				.catch((err: any) => {
+					console.error('Failed to send comment notification:', err);
+					console.error('Error details:', err?.message || 'Unknown error');
+					console.error('Error stack:', err?.stack || 'No stack');
+				})
+		);
+	} else {
+		console.log('Email notification skipped: config missing or disabled');
+	}
 
 	return json(
 		{

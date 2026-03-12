@@ -28,6 +28,7 @@ This is the **backend component** of a decoupled blog architecture:
   - **R2**: Cloudflare R2 object storage
   - **S3**: Compatible with 缤纷云(Bitiful) and other S3 providers
   - **Telegram**: Store images via Telegram Bot API
+- **Email Notifications**: New comment and reply notifications via Resend API or SMTP (QQ/163/Gmail)
 
 ## API Endpoints 📡
 
@@ -79,6 +80,12 @@ wrangler secret put S3_SECRET_ACCESS_KEY
 
 # Set Telegram Bot Token (if using Telegram storage)
 wrangler secret put TELEGRAM_BOT_TOKEN
+
+# Set Resend API Key (for email notifications via Resend)
+wrangler secret put RESEND_API_KEY
+
+# Set SMTP credentials (for email notifications via SMTP - QQ/163/Gmail/etc)
+wrangler secret put SMTP_PASS
 ```
 
 ### Environment Variables
@@ -112,6 +119,25 @@ TELEGRAM_PRIORITY = "3"
 
 # Default storage provider
 DEFAULT_STORAGE = "r2"
+
+# Email Notification Configuration
+# Option 1: Resend API (recommended for simplicity)
+# Get API key from https://resend.com (free tier: 100 emails/day)
+RESEND_API_KEY = ""                        # Set via wrangler secret put RESEND_API_KEY
+
+# Option 2: SMTP (QQ Mail, 163 Mail, Gmail, etc.)
+# Uses Cloudflare Workers TCP Sockets - no external service needed
+SMTP_USER = "your-qq@qq.com"               # Your email address
+SMTP_PASS = ""                             # Set via wrangler secret put SMTP_PASS
+SMTP_PROVIDER = "qq"                       # Auto-detected from email domain if not set
+                                           # Options: qq, 163, gmail, or leave empty for auto
+
+# Common email settings
+EMAIL_FROM = "noreply@yourdomain.com"      # Sender address (defaults to SMTP_USER if using SMTP)
+EMAIL_FROM_NAME = "博客评论通知"
+EMAIL_TO = "admin@yourdomain.com"          # Where to receive notifications
+NOTIFY_ON_COMMENT = "true"                 # Set to "false" to disable notifications
+BLOG_BASE_URL = "https://blog.261770.xyz"  # Your blog URL for comment links
 ```
 
 ## Storage Configuration Guide
@@ -169,6 +195,92 @@ How it works:
 - Files are stored in a Telegram channel
 - Maximum file size: 20MB for photos, 50MB for documents
 - File deletion is not supported via API
+
+### 4. Email Notifications
+
+The blog supports email notifications for new comments and replies using two methods:
+
+#### Option A: SMTP (Recommended for China users - QQ Mail, 163 Mail)
+
+Uses Cloudflare Workers' native TCP Sockets to connect directly to SMTP servers. **No external service required!**
+
+**Supported Providers:**
+- **QQ Mail** (`smtp.qq.com:587`)
+- **163 Mail** (`smtp.163.com:465`)
+- **126 Mail** (`smtp.126.com:465`)
+- **Gmail** (`smtp.gmail.com:587`)
+- **Custom SMTP** (any provider)
+
+**Setup Steps:**
+
+1. **Get SMTP Authorization Code** (not your email password!):
+   - **QQ Mail**: Go to QQ Mail → Settings → Accounts → SMTP → Generate Authorization Code
+   - **163 Mail**: Go to 163 Mail → Settings → POP3/SMTP → Enable and get Authorization Code
+   - **Gmail**: Use App Password (requires 2FA enabled)
+
+2. **Configure Secrets**:
+
+```bash
+# Set SMTP password (authorization code, not email password!)
+wrangler secret put SMTP_PASS
+```
+
+3. **Configure Variables** in `wrangler.toml`:
+
+```toml
+[vars]
+# SMTP Configuration
+SMTP_USER = "your-qq@qq.com"               # Your email address
+SMTP_PROVIDER = "qq"                       # Auto-detected if not set: qq, 163, gmail
+
+# Notification settings
+EMAIL_FROM_NAME = "博客评论通知"
+EMAIL_TO = "your-email@qq.com"             # Where to receive notifications
+NOTIFY_ON_COMMENT = "true"
+BLOG_BASE_URL = "https://yourblog.com"
+```
+
+#### Option B: Resend API
+
+Using [Resend](https://resend.com) - a developer-friendly email API.
+
+**Setup Steps:**
+
+1. **Sign up for Resend**: Go to [resend.com](https://resend.com) and create a free account
+2. **Get API Key**: Generate an API key from the dashboard
+3. **Configure Secrets**:
+
+```bash
+wrangler secret put RESEND_API_KEY
+```
+
+4. **Configure Variables** in `wrangler.toml`:
+
+```toml
+[vars]
+EMAIL_FROM = "noreply@yourdomain.com"      # Must be verified in Resend
+EMAIL_FROM_NAME = "博客评论通知"
+EMAIL_TO = "your-email@example.com"
+NOTIFY_ON_COMMENT = "true"
+BLOG_BASE_URL = "https://yourblog.com"
+```
+
+**Free Tier Limits:**
+- 100 emails per day
+- 3,000 emails per month
+
+#### Notification Types
+
+- **New Comment**: When someone comments on your blog post, you receive an email
+- **Reply Notification**: When someone replies to a comment, the original commenter is notified (if they have email on file)
+
+#### Email Templates
+
+Both SMTP and Resend use the same beautiful HTML email templates:
+- Responsive design for mobile and desktop
+- Comment content with proper formatting
+- Direct links to comments on your blog
+- Plain text fallback for compatibility
 
 ## Deployment 🌐
 
