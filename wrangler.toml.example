@@ -1,0 +1,108 @@
+name = "blog-worker"
+main = "src/index.ts"
+compatibility_date = "2024-03-17"
+
+# ==========================================
+# 数据库配置 (D1)
+# ==========================================
+[[d1_databases]]
+binding = "DB"
+database_name = "blog-db"
+database_id = "your-database-id-here"
+
+# ==========================================
+# 对象存储配置 (R2) - 可选
+# 如果使用 Telegram 存储，可以注释掉此部分
+# ==========================================
+# [[r2_buckets]]
+# binding = "IMAGES"
+# bucket_name = "blog-images"
+
+# ==========================================
+# Durable Objects (速率限制器)
+# ==========================================
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+# ==========================================
+# 分析引擎 (Analytics Engine) - 可选
+# ==========================================
+# [[analytics_engine_datasets]]
+# binding = "ANALYTICS"
+# dataset = "blog-analytics"
+
+# ==========================================
+# 环境变量 (非敏感配置)
+# ==========================================
+[vars]
+# 允许的域名 (多个域名用逗号分隔)
+PUBLIC_ALLOWED_ORIGIN = "https://your-domain.com,https://blog.your-domain.com"
+
+# 会话过期时间 (秒), 默认30天
+SESSION_TTL_SECONDS = "2592000"
+
+# 是否开启评论邮件通知
+NOTIFY_ON_COMMENT = "true"
+
+# 博客基础 URL
+BLOG_BASE_URL = "https://blog.your-domain.com"
+
+# ==========================================
+# 存储配置
+# ==========================================
+# 默认存储: telegram | r2 | s3
+DEFAULT_STORAGE = "telegram"
+
+# Telegram 存储配置
+TELEGRAM_ENABLED = "true"
+TELEGRAM_CHAT_ID = "your-telegram-chat-id"
+TELEGRAM_PRIORITY = "1"
+TELEGRAM_PROXY_URL = "https://your-worker-domain.com"
+
+# ==========================================
+# SMTP 邮件配置
+# ==========================================
+SMTP_ENABLED = "true"
+SMTP_HOST = "smtp.qq.com"
+SMTP_PORT = "465"
+SMTP_USER = "your-email@qq.com"
+SMTP_PROVIDER = "qq"
+EMAIL_FROM = "your-email@qq.com"
+EMAIL_FROM_NAME = "博客评论通知"
+EMAIL_TO = "your-email@qq.com"
+
+# ==========================================
+# GitHub OAuth 配置
+# ==========================================
+GITHUB_CLIENT_ID = "your-github-client-id"
+ADMIN_GITHUB_ID = "your-github-user-id"
+
+# ==========================================
+# Durable Objects 迁移配置
+# ==========================================
+[[migrations]]
+tag = "v1"
+new_classes = ["RateLimiter"]
+
+# ==========================================
+# 需要设置的 Secrets (使用 wrangler secret put)
+# ==========================================
+# 以下敏感信息需要通过命令行设置，不要在此文件中填写真实值：
+#
+# wrangler secret put TELEGRAM_BOT_TOKEN
+#   - Telegram Bot Token，从 @BotFather 获取
+#
+# wrangler secret put SMTP_PASS
+#   - SMTP 邮箱授权码/密码
+#
+# wrangler secret put GITHUB_CLIENT_SECRET
+#   - GitHub OAuth App 的 Client Secret
+#
+# 可选的 Secrets:
+# wrangler secret put RESEND_API_KEY
+#   - Resend 邮件服务 API Key (如果使用 Resend)
+#
+# wrangler secret put S3_ACCESS_KEY_ID
+# wrangler secret put S3_SECRET_ACCESS_KEY
+#   - S3 兼容存储的访问密钥 (如果使用 S3)

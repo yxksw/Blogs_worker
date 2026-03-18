@@ -87,7 +87,7 @@ export class SMTPClient {
 		
 		// Use TLS for port 465, plain TCP for 587 (STARTTLS)
 		try {
-			this.socket = connect({ hostname: host, port }, { secureTransport: secure ? 'on' : 'off' });
+			this.socket = connect({ hostname: host, port }, { secureTransport: secure ? 'on' : 'off', allowHalfOpen: false });
 			console.log('SMTP: Socket created');
 		} catch (err: any) {
 			console.error('SMTP: Failed to create socket:', err?.message || err);
@@ -128,7 +128,7 @@ export class SMTPClient {
 		
 		this.socket = connect(
 			{ hostname: this.config.host, port: this.config.port },
-			{ secureTransport: 'on' }
+			{ secureTransport: 'on', allowHalfOpen: false }
 		);
 		if (!this.socket) {
 			throw new Error('Failed to create TLS socket');
