@@ -146,3 +146,4 @@ wrangler tail
 - All secrets must be set via `wrangler secret put`
 - Rate limiting is enforced on image upload endpoint
 - Session tokens are validated against D1 database on each request
+V2

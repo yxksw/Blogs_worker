@@ -1,0 +1,13 @@
+{
+  "name": "blog-worker",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.97.0"
+  },
+  "dependencies": {
+    "resend": "^4.1.0"
+  }
+}
