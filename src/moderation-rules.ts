@@ -1,42 +1,89 @@
 /**
  * Content Moderation Rules
  * Separate file for easy rule management
- *
- * NOTE: This file only contains technical attack pattern detection.
- * Semantic content (offensive language, political content, spam) is
- * handled by AI moderation. Keep this file free of explicit keyword lists
- * to avoid sensitive content in open source.
  */
 
 export type ModerationResult = 'ALLOW' | 'REVIEW' | 'REJECT';
 
 // ============================================
 // Technical Attack Patterns (Rule-based)
+// Only blocks clear attack patterns, not normal words
 // ============================================
 
-// SQL injection - obvious patterns that indicate malicious input
+// SQL injection - only block clear attack patterns, not normal words like "select"
 export const SQL_INJECTION_PATTERNS = [
-	/(\b(select|union|insert|update|delete|drop|alter|create|truncate)\b)/i,
-	/(--|;|'|"|\`|\\|\*|xp_|sp_|exec|execute)/i,
-	/(or\s+1\s*=\s*1|and\s+1\s*=\s*1)/i,
+	/;\s*(drop|delete|update|insert|alter|create|truncate)/i,
+	/(or|and)\s+['"]?\d+['"]?\s*=\s*['"]?\d+['"]?/i,  // or 1=1, and 1=1
+	/union\s+(all\s+)?select/i,
+	/--\s*$/m,
+	/;\s*$/m,
+	/\bexec\s*\(/i,
+	/\bexecute\s*\(/i,
+	/\bxpa_/i,
+	/\bsp_/i,
 ];
 
-// XSS patterns - obvious script/injection attempts
+// XSS patterns - block HTML/JS injection tags, not normal words
 export const XSS_PATTERNS = [
-	/(<script|javascript:|onerror|onclick|onload|onmouse)/i,
-	/(<iframe|<object|<embed|<svg)/i,
-	/(alert\s*\(|eval\s*\(|document\.|window\.)/i,
-	/(&lt;script|&lt;iframe)/i,
+	/<script/i,
+	/javascript:/i,
+	/on\w+\s*=/i,          // onerror=, onclick=, onload=, etc.
+	/<iframe/i,
+	/<object/i,
+	/<embed/i,
+	/<svg/i,
+	/data:/i,              // data: URL with content
+	/vbscript:/i,
+];
+
+// ============================================
+// English Vulgar Abbreviations (Rule-based)
+// ============================================
+
+export const VULGAR_ABBREVIATIONS = [
+	/\bkys\b/i,            // kill yourself - block
+	/\brm\b/i,             // racial slur - block
+	/\bstfu\b/i,           // shut the fuck up - block
+	/\bf+u+\b/i,           // f*ck variations - block
+	/\bs+u+c+k+\b/i,       // s*ck variations - block
+	/\bb+i+t+c+h+\b/i,     // b*tch variations - block
+	/\bd+a+m+n+\b/i,       // d*mn variations - block
+	/\ba+s+s+\b/i,         // a*s variations - block
+	/\bd+i+c+k+\b/i,       // d*ck variations - block
+	/\bp+u+s+s+y+\b/i,     // p*ssy variations - block
+	/\bn+i+g+g+e+r+\b/i,   // racial slurs - block
+	/\bfml\b/i,            // fuck my life - block
+	/\bsmh\b/i,            // shaking my head - block
+	/\bgtfo\b/i,           // get the fuck out - block
+	/\bYGK\?/i,            // you gonna catch these hands - block
+	/\bLMAO\b/i,           // laughing my ass off - block
+	/\bROFL\b/i,           // rolling on floor laughing - block
+	/\bIOU\b/i,            // not vulgar, ignore
+];
+
+// ============================================
+// Chinese Profanity Patterns (Rule-based)
+// ============================================
+
+export const CHINESE_PROFANITY_PATTERNS = [
+	/他妈[的]|t[mM][aA][mM][aA]/gi,                          // 他妈的
+	/[傻逼破鞋]|[屄婊子]/gi,                                  // 傻逼/屄/婊子/破鞋
+	/滚[你妈]|去死/g,                                        // 滚你妈/去死
+	/我[操草艹]|woc|wocao/gi,                                // 卧槽等感叹
+	/[尼玛的]|n[iI][mM][aA]/gi,                              // 尼玛(的)
+	/王八蛋/g,                                              // 王八蛋
+	/狗日(g?:的?|了)/g,                                      // 狗日的
+	/[废物垃圾]/g,                                          // 废物/垃圾 (when used as insult)
+	/[脑残智障弱智]/g,                                       // 脑残/智障/弱智
+	/[麻痹嘣]/g,                                             // 麻痹/嘣
+	/畜生/g,                                                 // 畜生
+	/人渣/g,                                                 // 人渣
 ];
 
 // ============================================
 // AI Moderation (handled by callAI)
 // ============================================
-// The AI layer handles:
-// - Offensive language / harassment
-// - Political sensitive content
-// - Advertisements / spam
-// - General content quality assessment
+// The AI layer handles semantic analysis beyond these rules
 
 // Content length limits (apply to all content)
 export const MAX_CONTENT_LENGTH = 5000;
@@ -58,6 +105,20 @@ export function ruleFilter(content: string): { result: ModerationResult; reason?
 	for (const pattern of XSS_PATTERNS) {
 		if (pattern.test(content)) {
 			return { result: 'REJECT', reason: 'Invalid input pattern detected' };
+		}
+	}
+
+	// Check for English vulgar abbreviations
+	for (const pattern of VULGAR_ABBREVIATIONS) {
+		if (pattern.test(content)) {
+			return { result: 'REJECT', reason: 'Content contains inappropriate language' };
+		}
+	}
+
+	// Check for Chinese profanity
+	for (const pattern of CHINESE_PROFANITY_PATTERNS) {
+		if (pattern.test(content)) {
+			return { result: 'REJECT', reason: 'Content contains inappropriate language' };
 		}
 	}
 

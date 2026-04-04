@@ -2,6 +2,9 @@
   "name": "blog-worker",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "dev": "wrangler dev --local --port 8787"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",
     "typescript": "^5.7.2",

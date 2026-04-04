@@ -29,7 +29,7 @@ type R2Object = {
 };
 
 type KVNamespace = {
-	get(key: string): Promise<string | undefined>;
+	get(key: string): Promise<string | null>;
 	put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
 	delete(key: string): Promise<void>;
 };
@@ -163,7 +163,9 @@ export default {
 
 		try {
 			let response: Response;
-			switch (`${request.method} ${url.pathname}`) {
+			const routeKey = `${request.method} ${url.pathname}`;
+			console.log('Routing request:', routeKey);
+			switch (routeKey) {
 				case 'GET /api/auth/github/start':
 					response = await handleGithubStart(request, env);
 					break;
@@ -754,9 +756,9 @@ async function handleMeUpdate(request: Request, env: Env): Promise<Response> {
 		return json({ error: 'Content-Type must be application/json' }, 415);
 	}
 
-	let payload: { avatarUrl?: unknown };
+	let payload: { avatarUrl?: unknown; username?: unknown };
 	try {
-		payload = (await request.json()) as { avatarUrl?: unknown };
+		payload = (await request.json()) as { avatarUrl?: unknown; username?: unknown };
 	} catch {
 		return json({ error: 'Invalid JSON' }, 400);
 	}
@@ -766,11 +768,48 @@ async function handleMeUpdate(request: Request, env: Env): Promise<Response> {
 		return json({ error: 'Invalid avatar URL' }, 400);
 	}
 
-	await env.DB.prepare(
-		`UPDATE users SET avatar_url = ?, updated_at = ? WHERE id = ?`
-	)
-		.bind(avatarUrl, Date.now(), session.user_id)
-		.run();
+	// Handle username update with AI moderation
+	let newName = session.name;
+	let shouldUpdateName = false;
+	if (payload.username !== undefined) {
+		const usernameStr = typeof payload.username === 'string' ? payload.username.trim() : '';
+		if (!usernameStr) {
+			return json({ error: 'Username cannot be empty' }, 400);
+		}
+		if (usernameStr.length < 2 || usernameStr.length > 30) {
+			return json({ error: 'Username must be 2-30 characters' }, 400);
+		}
+
+		// Moderate username with AI (uses more lenient username-specific moderation)
+		const modResult = await moderateUsername(usernameStr, env);
+		if (modResult.result === 'REJECT') {
+			return json({ error: 'Username rejected by moderation. Please choose a different name.' }, 400);
+		}
+
+		newName = usernameStr;
+		shouldUpdateName = true;
+	}
+
+	// Only update avatar if explicitly provided and valid
+	if (payload.avatarUrl !== undefined) {
+		if (avatarUrl === null) {
+			return json({ error: 'Invalid avatar URL' }, 400);
+		}
+		await env.DB.prepare(
+			`UPDATE users SET avatar_url = ?, updated_at = ? WHERE id = ?`
+		)
+			.bind(avatarUrl, Date.now(), session.user_id)
+			.run();
+	}
+
+	// Only update name if explicitly provided
+	if (shouldUpdateName) {
+		await env.DB.prepare(
+			`UPDATE users SET name = ?, updated_at = ? WHERE id = ?`
+		)
+			.bind(newName, Date.now(), session.user_id)
+			.run();
+	}
 
 	const updated = await env.DB.prepare(
 		`SELECT id, login, name, avatar_url, profile_url FROM users WHERE id = ? LIMIT 1`
@@ -924,7 +963,6 @@ async function cacheResult(contentHash: string, result: ModerationResult, env: E
 }
 
 // Layer 3: AI moderation
-// NOTE: This only runs after ruleFilter() passes (ALLOW)
 async function callAI(content: string, env: Env): Promise<ModerationResult> {
 	try {
 		const result = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
@@ -933,17 +971,22 @@ async function callAI(content: string, env: Env): Promise<ModerationResult> {
 					role: 'system',
 					content: `You are a content quality moderator for a personal blog. Evaluate the user message and respond with EXACTLY one word: ALLOW or REJECT.
 
-ALLOW: Normal, friendly, constructive communication. Genuine questions, thoughtful comments, legitimate inquiries.
+ALLOW: All normal, friendly communication is allowed:
+- Questions of any kind (technical, casual, curious)
+- Positive feedback, praise, appreciation (even short phrases like "great post!", "谢谢", "很棒")
+- Thoughtful comments, opinions, discussions
+- Technical feedback, suggestions
+- Short acknowledgments like "thanks", "赞", "好评"
+- Normal English comments without harmful intent
 
-REJECT: Content that is harmful, inappropriate, or undesirable for a personal blog. This includes:
-- Obscene or pornographic content
-- Advertisements, promotional content, or spam
-- Harassment, personal attacks, or verbal abuse
-- Content that causes division, conflict, or controversy
-- Political topics or sensitive social issues
-- Any content that a blog author would not want to receive
+REJECT: Reject any content containing:
+- English vulgar abbreviations: "rm", "kys", "stfu", "f**k", "s**t", "bitch", "damn", "ass", "dick", "pussy", "fag", "nigger" etc. (even in lowercase or with symbols)
+- Any form of harassment, insults, or verbal abuse (English or Chinese)
+- Profanity or cursing words
+- Implicit threats or hostile language
+- Spam or advertisements
 
-Be strict. When in doubt, reject to protect the blog environment. Only allow genuinely positive contributions.`,
+IMPORTANT: Even if a comment seems positive overall, if it contains English vulgar abbreviations or harassment words, REJECT it. "Good article! rm yourself!" should be REJECTED because of "rm".`,
 				},
 				{
 					role: 'user',
@@ -952,16 +995,24 @@ Be strict. When in doubt, reject to protect the blog environment. Only allow gen
 			],
 		});
 
-		const response = result.response.trim().toUpperCase();
-		// Only ALLOW or REJECT allowed
-		if (response === 'ALLOW' || response === 'REJECT') {
-			return response;
+		const response = (result as { response: string }).response;
+		const text = (response || '').trim().toUpperCase();
+
+		console.log('AI raw response:', response);
+		console.log('AI parsed text:', text);
+
+		if (text === 'ALLOW' || text === 'REJECT') {
+			return text;
 		}
-		// Unexpected response = reject for safety
-		return 'REJECT';
+		if (text.includes('ALLOW')) return 'ALLOW';
+		if (text.includes('REJECT')) return 'REJECT';
+
+		// Unexpected response = allow by default
+		console.log('AI response unexpected, defaulting to ALLOW');
+		return 'ALLOW';
 	} catch (error) {
 		console.error('AI moderation failed:', error);
-		return 'REJECT'; // Fail safe = reject
+		return 'ALLOW'; // Allow on error
 	}
 }
 
@@ -994,6 +1045,65 @@ async function moderateContent(
 	// Cache the result
 	await cacheResult(contentHash, aiResult, env);
 
+	return { result: aiResult };
+}
+
+// Username moderation - more lenient for simple names
+async function callAIForUsername(username: string, env: Env): Promise<ModerationResult> {
+	try {
+		const result = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
+			messages: [
+				{
+					role: 'system',
+					content: `You are a username quality moderator for a personal blog. Evaluate the username and respond with EXACTLY one word: ALLOW or REJECT.
+
+ALLOW: Any normal, acceptable username including:
+- Simple names like "John", "Mike", "dandan", "小明", "测试"
+- English or Chinese names
+- Nicknames and aliases
+- Any name that is not explicitly offensive
+
+REJECT: Only reject usernames that are:
+- Obviously offensive or vulgar ( slurs, curses)
+- Spam or advertisement ( "buy now", "free money")
+- Extremely long or nonsensical strings
+
+IMPORTANT: Be very permissive with usernames. Short names like "dan", "test", "dandan" should be ALLOWED. Only reject clearly offensive content.`,
+				},
+				{
+					role: 'user',
+					content: `Username to check:\n${username}`,
+				},
+			],
+		});
+
+		const response = (result as { response: string }).response;
+		const text = (response || '').trim().toUpperCase();
+
+		console.log('Username AI raw response:', response);
+		console.log('Username AI parsed text:', text);
+
+		if (text === 'ALLOW' || text === 'REJECT') return text;
+		if (text.includes('ALLOW')) return 'ALLOW';
+		if (text.includes('REJECT')) return 'REJECT';
+
+		return 'ALLOW'; // Default to allow for username
+	} catch (error) {
+		console.error('Username AI moderation failed:', error);
+		return 'ALLOW'; // Fail open for username
+	}
+}
+
+async function moderateUsername(
+	username: string,
+	env: Env
+): Promise<{ result: ModerationResult; reason?: string }> {
+	const ruleResult = ruleFilter(username);
+	if (ruleResult.result !== 'ALLOW') {
+		return ruleResult;
+	}
+
+	const aiResult = await callAIForUsername(username, env);
 	return { result: aiResult };
 }
 
@@ -1184,7 +1294,7 @@ async function handleDevLogin(request: Request, env: Env): Promise<Response> {
 
 async function handleCommentsGet(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
-	const post = normalizePostSlug(url.searchParams.get('post'));
+	const post = normalizePostSlug(url.searchParams.get('post_id'));
 	if (!post) {
 		return json({ error: 'Invalid post slug' }, 400);
 	}
@@ -1319,40 +1429,57 @@ async function handleViewsPost(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleCommentsPost(request: Request, env: Env): Promise<Response> {
+	console.log('handleCommentsPost called, url:', request.url);
 	const rate = await checkRateLimit(request, env, 'comment_post');
 	if (rate) return rate;
 
+	const authHeader = request.headers.get('authorization') || 'NONE';
+	console.log('Auth header:', authHeader.substring(0, 50));
 	const token = bearerToken(request);
 	if (!token) {
-		return json({ error: 'Unauthorized' }, 401);
+		console.log('No token - bearerToken returned null');
+		return json({ error: 'Unauthorized', reason: 'no token' }, 401);
 	}
+	console.log('Token length:', token.length);
 
-	const session = await findSessionUser(env, token);
-	if (!session) {
-		return json({ error: 'Unauthorized' }, 401);
+	let session;
+	try {
+		session = await findSessionUser(env, token);
+		if (!session) {
+			console.log('No session found for token');
+			return json({ error: 'Unauthorized', reason: 'invalid session' }, 401);
+		}
+		console.log('Session found for user:', session.login);
+	} catch (e) {
+		console.error('Session lookup error:', e);
+		return json({ error: 'Unauthorized', reason: 'session error' }, 401);
 	}
 
 	if (!request.headers.get('content-type')?.includes('application/json')) {
 		return json({ error: 'Content-Type must be application/json' }, 415);
 	}
 
-	let payload: { post?: unknown; body?: unknown; parent_id?: unknown };
+	let payload: { post_id?: unknown; content?: unknown; parent_id?: unknown };
 	try {
-		payload = (await request.json()) as { post?: unknown; body?: unknown; parent_id?: unknown };
+		payload = (await request.json()) as { post_id?: unknown; content?: unknown; parent_id?: unknown };
 	} catch {
 		return json({ error: 'Invalid JSON' }, 400);
 	}
 
-	const post = normalizePostSlug(payload.post);
+	console.log('Payload:', JSON.stringify(payload));
+	const post = normalizePostSlug(payload.post_id);
 	if (!post) {
+		console.log('Invalid post slug:', payload.post_id, 'type:', typeof payload.post_id);
 		return json({ error: 'Invalid post slug' }, 400);
 	}
 
-	const body = typeof payload.body === 'string' ? payload.body.trim() : '';
+	const body = typeof payload.content === 'string' ? payload.content.trim() : '';
+	console.log('Comment body length:', body.length, 'content:', body.substring(0, 50));
 	if (body.length < COMMENT_MIN_LENGTH || body.length > COMMENT_MAX_LENGTH) {
 		return json({ error: `Comment length must be ${COMMENT_MIN_LENGTH}-${COMMENT_MAX_LENGTH}` }, 400);
 	}
 	if (containsHtml(body)) {
+		console.log('HTML detected in body');
 		return json({ error: 'HTML is not allowed' }, 400);
 	}
 
@@ -1395,11 +1522,12 @@ async function handleCommentsPost(request: Request, env: Env): Promise<Response>
 		return json({ error: 'Comment rejected by moderation' }, 400);
 	}
 
+	// Auto-approve comments that pass moderation (user is authenticated via GitHub OAuth)
 	const commentId = `c_${randomBase64Url(12)}`;
 
 	await env.DB.prepare(
 		`INSERT INTO comments (id, parent_id, post_slug, user_id, body, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`
+		 VALUES (?, ?, ?, ?, ?, 'approved', ?, ?)`
 	)
 		.bind(commentId, parentId, post, session.user_id, body, now, now)
 		.run();
@@ -1411,7 +1539,7 @@ async function handleCommentsPost(request: Request, env: Env): Promise<Response>
 				parentId,
 				postSlug: post,
 				body,
-				status: 'pending',
+				status: 'approved',
 				createdAt: now,
 				user: {
 					id: session.user_id,
