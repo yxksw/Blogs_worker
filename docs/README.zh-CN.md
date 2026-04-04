@@ -1,148 +1,168 @@
 # Blog Worker
 
-一个独立的 Cloudflare Worker 项目，为博客系统提供后端 API。
+博客系统的后端 API，基于 Cloudflare Workers 构建。
 
 [![API](https://img.shields.io/badge/API-https://api.danarnoux.com-0f766e?style=for-the-badge&logo=cloudflare&logoColor=white)](https://api.danarnoux.com)
 [![前端](https://img.shields.io/badge/前端-DansBlog-1d4ed8?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlog)
 [![仓库](https://img.shields.io/badge/仓库-DansBlogs_worker-111827?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlogs_worker)
-[![B站](https://img.shields.io/badge/关注-B站-fe738c?style=for-the-badge&logo=bilibili)](https://space.bilibili.com/435440676)
 
 > **前端**: [DansBlog](https://github.com/Dancncn/DansBlog)
 >
-> **English Version**: [View English Documentation](../README.md)
+> **English Version**: [查看英文文档](../README.md)
 
-## 项目概述
+## 系统架构
 
-这是博客系统的**后端组件**，采用前后端分离架构：
+这是一个**前后端分离**的博客架构：
 
-- **前端**: [DansBlog](https://github.com/Dancncn/DansBlog) - 基于 Astro 的静态博客
-- **后端**: 本 Worker - Cloudflare Workers + D1 + R2 + Durable Objects
+```
+┌─────────────────────────────────────────┐
+│           Cloudflare Pages              │
+│         (Astro 静态博客)                 │
+└─────────────────┬───────────────────────┘
+                  │ REST API
+                  ▼
+┌─────────────────────────────────────────┐
+│        Cloudflare Worker                │
+│   ┌─────────────────────────────────┐   │
+│   │  API 处理器 (GitHub OAuth,       │   │
+│   │  评论、图片、管理后台)            │   │
+│   └─────────────────────────────────┘   │
+│   ┌─────────────────────────────────┐   │
+│   │  Cloudflare Workers AI           │   │
+│   │  (评论 AI 审核)                  │   │
+│   └─────────────────────────────────┘   │
+└─────────────────┬───────────────────────┘
+                  │
+    ┌─────────────┼─────────────┐
+    ▼             ▼             ▼
+ ┌──────┐     ┌──────┐     ┌────────┐
+ │  D1  │     │  R2  │     │   KV   │
+ │(SQL) │     │(对象)│     │(缓存)  │
+ └──────┘     └──────┘     └────────┘
+```
 
-## 特性 🚀
+## 功能特性 🚀
 
-- GitHub OAuth 认证（Authorization Code + PKCE + state）
-- D1 数据库支持的用户、会话和评论管理
-- Durable Object 限流机制
-- Bearer Token 会话（`Authorization: Bearer <token>`）
-- R2 图片存储集成
+| 功能 | 描述 |
+|------|------|
+| GitHub 登录 | PKCE 授权流程 |
+| 邮箱登录 | 通过 Resend 发送魔法链接 |
+| 评论系统 | 按文章隔离，AI 辅助审核 |
+| 图片托管 | R2 对象存储 |
+| 限流机制 | Durable Objects + KV |
+| AI 审核 | Cloudflare Workers AI 自动审核评论 |
+| 管理员后台 | Cloudflare Access 保护（开发中） |
 
 ## API 端点 📡
 
 ### 认证
 
-- `GET /api/auth/github/start?returnTo=...` - 启动 OAuth 流程
-- `GET /api/auth/github/callback` - OAuth 回调处理
-- `GET /api/me` - 获取当前用户信息
-- `POST /api/auth/logout` - 登出并销毁会话
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/auth/github/start` | GET | 启动 GitHub OAuth |
+| `/api/auth/github/callback` | GET | 处理 OAuth 回调 |
+| `/api/auth/email/send` | POST | 发送登录链接 |
+| `/api/auth/email/verify` | GET | 验证登录令牌 |
+| `/api/auth/logout` | POST | 登出 |
+| `/api/me` | GET | 获取当前用户信息 |
+
+### 内容
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/comments` | GET | 获取文章评论 |
+| `/api/comments` | POST | 创建评论（需登录） |
+
+### 媒体
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/upload` | POST | 上传图片到 R2（需登录） |
+| `/api/images` | GET | 列出已上传图片 |
+| `/api/images` | DELETE | 删除图片 |
+
+### 管理员（需 Cloudflare Access）
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/admin/check` | GET | 检查管理员状态 |
+| `/api/admin/stats` | GET | 评论统计 |
+| `/api/admin/comments` | GET | 获取所有评论 |
+| `/api/admin/comment/approve` | POST | 批准评论 |
+| `/api/admin/comment/reject` | POST | 拒绝评论 |
+| `/api/admin/comment` | DELETE | 删除评论 |
+
+## 数据模型
+
+### 用户
+```sql
+users(id, github_id, login, name, email, avatar_url, is_admin, created_at)
+```
+
+### 会话
+```sql
+sessions(id, user_id, token, expires_at, created_at)
+```
 
 ### 评论
-
-- `GET /api/comments?slug=<post-slug>` - 获取文章评论
-- `POST /api/comments` - 创建新评论（需登录）
+```sql
+comments(id, parent_id, post_slug, user_id, body, status, created_at, updated_at)
+```
 
 ### 图片
-
-- `GET /api/images` - 列出已上传图片（需登录）
-- `POST /api/upload` - 上传图片到 R2（需登录，有限流）
-- `DELETE /api/images` - 删除图片（需登录）
-
-### 注意事项
-
-- 会话基于 Authorization header 的 token
-- 不使用跨域 cookie 会话
-- OAuth 回调仅使用短期 cookie 存储 `state`/`code_verifier` 进行验证
-
-## 所需密钥 / 变量 🔐
-
-通过 Wrangler CLI 设置密钥，请勿提交真实密钥。
-
-```bash
-# 设置 GitHub OAuth 密钥
-wrangler secret put GITHUB_CLIENT_SECRET
-
-# 在 wrangler.toml 中设置非敏感变量
-GITHUB_CLIENT_ID = "your-client-id"
-PUBLIC_ALLOWED_ORIGIN = "https://danarnoux.com,https://www.danarnoux.com"
-SESSION_TTL_SECONDS = "2592000"
+```sql
+images(id, user_id, name, url, size, created_at)
 ```
 
-## 部署 🌐
+## 技术栈
 
-### 前置条件
+| 组件 | 技术 |
+|------|------|
+| 运行时 | Cloudflare Workers |
+| 数据库 | Cloudflare D1 (SQLite) |
+| 对象存储 | Cloudflare R2 |
+| 限流 | Durable Objects + KV |
+| AI | Cloudflare Workers AI (Llama 3) |
+| 认证 | GitHub OAuth + 邮箱魔法链接 |
+| 邮件 | Resend |
+| 验证码 | Cloudflare Turnstile |
 
-1. 登录 Cloudflare
+## 前端集成
 
-```bash
-wrangler login
+Astro 前端通过 REST API 调用此服务：
+
+```typescript
+const API_BASE = 'https://api.danarnoux.com';
+
+fetch(`${API_BASE}/api/comments?slug=my-post`, {
+  headers: { Authorization: `Bearer ${token}` }
+})
 ```
 
-2. 创建 D1 数据库
+## 部署
 
 ```bash
-wrangler d1 create blog_worker_db
-```
+# 安装依赖
+npm install
 
-3. 应用数据库 schema
-
-```bash
-wrangler d1 execute blog_worker_db --file db/schema.sql --remote
-```
-
-### 部署步骤
-
-```bash
-# 部署 Worker
-wrangler deploy
-```
-
-### 配置说明
-
-需要以下资源（在 `wrangler.toml` 中配置）：
-
-- **D1 数据库**: `blog_worker_db` - 用户会话和评论
-- **R2 存储桶**: `blog-images` - 图片存储
-- **Durable Object**: `RateLimiter` - 限流
-- **自定义域名**: `api.danarnoux.com` - API 访问入口
-
-## 前端集成 🔗
-
-Astro 前端集成方式：
-
-- API 域名：`https://api.danarnoux.com`
-- 认证请求发送 `Authorization: Bearer <token>` header
-- 建议将 token 存储在 sessionStorage 中
-- 无需 Pages Functions - 本 Worker 处理所有后端逻辑
-
-## 开发 💻
-
-```bash
 # 本地开发
-wrangler dev
+npm run dev
 
-# 部署到生产环境
-wrangler deploy
-
-# 查看日志
-wrangler tail
+# 部署到生产
+npm run deploy
 ```
 
-## 项目结构 📁
+## 项目结构
 
-```text
-.
-├─ db/
-│  └─ schema.sql               # D1 数据库 schema
-├─ scripts/
-│  └─ upload-images.ps1        # R2 图片上传脚本
+```
+worker/
 ├─ src/
-│  └─ index.ts                 # Worker 入口和所有路由处理
-├─ .gitignore                  # 排除 wrangler.toml, .wrangler/, node_modules/
-└─ README.md
+│  └─ index.ts          # 所有 API 路由处理
+├─ db/
+│  └─ schema.sql        # D1 数据库 Schema
+├─ docs/
+│  └─ README.zh-CN.md   # 中文文档
+└─ wrangler.toml        # Cloudflare 配置（不提交到 git）
 ```
 
-## 安全说明 🛡️
-
-- `wrangler.toml` 包含敏感的 `database_id` - 已从 git 排除
-- 所有密钥必须通过 `wrangler secret put` 设置
-- 图片上传端点启用了限流
-- 每次请求都会验证会话 token
+> **注意**: `wrangler.toml` 包含基础设施绑定，已从 git 排除。配置通过环境变量或 `wrangler secret put` 设置。

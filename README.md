@@ -1,149 +1,170 @@
 # Blog Worker
 
-A standalone Cloudflare Worker project providing backend API for the blog system.
+A standalone Cloudflare Worker providing backend API for the blog system.
 
 [![API](https://img.shields.io/badge/API-https://api.danarnoux.com-0f766e?style=for-the-badge&logo=cloudflare&logoColor=white)](https://api.danarnoux.com)
 [![Frontend](https://img.shields.io/badge/Frontend-DansBlog-1d4ed8?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlog)
 [![Repository](https://img.shields.io/badge/Repository-DansBlogs_worker-111827?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Dancncn/DansBlogs_worker)
-[![Bilibili](https://img.shields.io/badge/Watch-Bilibili-fe738c?style=for-the-badge&logo=bilibili)](https://space.bilibili.com/435440676)
 
 > **Frontend**: [DansBlog](https://github.com/Dancncn/DansBlog)
 >
 > **中文版**: [查看中文文档](./docs/README.zh-CN.md)
 
-## Project Overview
+## Architecture Overview
 
 This is the **backend component** of a decoupled blog architecture:
 
-- **Frontend**: [DansBlog](https://github.com/Dancncn/DansBlog) - Astro-based static blog
-- **Backend**: This Worker - Cloudflare Workers with D1, R2, and Durable Objects
+```
+┌─────────────────────────────────────────┐
+│           Cloudflare Pages              │
+│         (Astro Static Site)             │
+└─────────────────┬───────────────────────┘
+                  │ REST API
+                  ▼
+┌─────────────────────────────────────────┐
+│        Cloudflare Worker                │
+│   ┌─────────────────────────────────┐    │
+│   │  API Handlers (GitHub OAuth,   │    │
+│   │  Comments, Images, Admin)      │    │
+│   └─────────────────────────────────┘    │
+│   ┌─────────────────────────────────┐    │
+│   │  Cloudflare Workers AI           │    │
+│   │  (Comment Moderation)           │    │
+│   └─────────────────────────────────┘    │
+└─────────────────┬───────────────────────┘
+                  │
+    ┌─────────────┼─────────────┐
+    ▼             ▼             ▼
+ ┌──────┐     ┌──────┐     ┌────────┐
+ │  D1  │     │  R2  │     │   KV   │
+ │(SQL) │     │(Blob)│     │(Cache) │
+ └──────┘     └──────┘     └────────┘
+```
 
 ## Features 🚀
 
-- GitHub OAuth authentication (Authorization Code + PKCE + state)
-- D1-backed users, sessions, and comments management
-- Durable Object-based rate limiting
-- Bearer token session (`Authorization: Bearer <token>`)
-- R2 image storage integration
+| Feature | Description |
+|---------|-------------|
+| GitHub OAuth | PKCE-based authorization flow |
+| Email Login | Magic link via Resend |
+| Comments | Per-post, D1-backed with AI moderation |
+| Image Hosting | R2-backed with signed URLs |
+| Rate Limiting | Durable Object-based mechanism |
+| AI Moderation | Cloudflare Workers AI auto-reviews comments |
+| Admin Dashboard | Cloudflare Access protected (under development) |
 
 ## API Endpoints 📡
 
 ### Authentication
 
-- `GET /api/auth/github/start?returnTo=...` - Initiate OAuth flow
-- `GET /api/auth/github/callback` - OAuth callback handler
-- `GET /api/me` - Get current user info
-- `POST /api/auth/logout` - Logout and invalidate session
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/github/start` | GET | Initiate GitHub OAuth |
+| `/api/auth/github/callback` | GET | Handle OAuth callback |
+| `/api/auth/email/send` | POST | Send magic login link |
+| `/api/auth/email/verify` | GET | Verify magic link token |
+| `/api/auth/logout` | POST | Invalidate session |
+| `/api/me` | GET | Get current user info |
+
+### Content
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/comments` | GET | Fetch comments by post slug |
+| `/api/comments` | POST | Create a comment (auth required) |
+
+### Media
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/upload` | POST | Upload image to R2 (auth required) |
+| `/api/images` | GET | List user's uploaded images |
+| `/api/images` | DELETE | Delete an image |
+
+### Admin (Cloudflare Access Required)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/admin/check` | GET | Check admin status |
+| `/api/admin/stats` | GET | Comment statistics |
+| `/api/admin/comments` | GET | List all comments |
+| `/api/admin/comment/approve` | POST | Approve a comment |
+| `/api/admin/comment/reject` | POST | Reject a comment |
+| `/api/admin/comment` | DELETE | Delete a comment |
+
+## Data Model
+
+### Users
+```sql
+users(id, github_id, login, name, email, avatar_url, is_admin, created_at)
+```
+
+### Sessions
+```sql
+sessions(id, user_id, token, expires_at, created_at)
+```
 
 ### Comments
-
-- `GET /api/comments?slug=<post-slug>` - Fetch comments for a post
-- `POST /api/comments` - Create a new comment (requires auth)
+```sql
+comments(id, parent_id, post_slug, user_id, body, status, created_at, updated_at)
+```
 
 ### Images
-
-- `GET /api/images` - List uploaded images (requires auth)
-- `POST /api/upload` - Upload image to R2 (requires auth, rate limited)
-- `DELETE /api/images` - Delete an image (requires auth)
-
-### Notes
-
-- Session is token-based via Authorization header
-- Cross-domain cookie session is not used
-- OAuth callback only uses short-lived cookies for `state`/`code_verifier` validation
-
-## Required Secrets / Vars 🔐
-
-Set secrets via Wrangler CLI. Do not commit real secrets.
-
-```bash
-# Set GitHub OAuth secret
-wrangler secret put GITHUB_CLIENT_SECRET
-
-# Set non-secret variables in wrangler.toml
-GITHUB_CLIENT_ID = "your-client-id"
-PUBLIC_ALLOWED_ORIGIN = "https://danarnoux.com,https://www.danarnoux.com"
-SESSION_TTL_SECONDS = "2592000"
+```sql
+images(id, user_id, name, url, size, created_at)
 ```
 
-## Deployment 🌐
+## Tech Stack
 
-### Prerequisites
+| Component | Technology |
+|-----------|------------|
+| Runtime | Cloudflare Workers |
+| Database | Cloudflare D1 (SQLite) |
+| Object Storage | Cloudflare R2 |
+| Rate Limiting | Durable Objects + KV |
+| AI | Cloudflare Workers AI (Llama 3) |
+| Authentication | GitHub OAuth + Email Magic Links |
+| Email | Resend |
+| Captcha | Cloudflare Turnstile |
 
-1. Login to Cloudflare
+## Frontend Integration
 
-```bash
-wrangler login
+The Astro frontend consumes this API:
+
+```typescript
+// API base URL
+const API_BASE = 'https://api.danarnoux.com';
+
+// Authenticated request
+fetch(`${API_BASE}/api/comments?slug=my-post`, {
+  headers: { Authorization: `Bearer ${token}` }
+})
 ```
 
-2. Create D1 database
+## Deployment
 
 ```bash
-wrangler d1 create blog_worker_db
-```
+# Install dependencies
+npm install
 
-3. Apply database schema
-
-```bash
-wrangler d1 execute blog_worker_db --file db/schema.sql --remote
-```
-
-### Deploy Steps
-
-```bash
-# Deploy the Worker
-wrangler deploy
-```
-
-### Configuration
-
-The following resources are required (configured in `wrangler.toml`):
-
-- **D1 Database**: `blog_worker_db` - User sessions and comments
-- **R2 Bucket**: `blog-images` - Image storage
-- **Durable Object**: `RateLimiter` - Rate limiting
-- **Custom Domain**: `api.danarnoux.com` - API access point
-
-## Frontend Integration 🔗
-
-For the Astro frontend integration:
-
-- API base: `https://api.danarnoux.com`
-- Send `Authorization: Bearer <token>` header for authenticated requests
-- Store token client-side (sessionStorage recommended)
-- No Pages Functions required - this Worker handles all backend logic
-
-## Development 💻
-
-```bash
 # Local development
-wrangler dev
+npm run dev
 
 # Deploy to production
-wrangler deploy
-
-# View logs
-wrangler tail
+npm run deploy
 ```
 
-## Project Structure 📁
+## Project Structure
 
-```text
-.
-├─ db/
-│  └─ schema.sql               # D1 database schema
-├─ scripts/
-│  └─ upload-images.ps1        # R2 image upload script
+```
+worker/
 ├─ src/
-│  └─ index.ts                 # Worker entry point and all route handlers
-├─ .gitignore                  # Excludes wrangler.toml, .wrangler/, node_modules/
-└─ README.md
+│  └─ index.ts          # All API route handlers
+├─ db/
+│  └─ schema.sql        # D1 database schema
+├─ docs/
+│  └─ README.zh-CN.md   # Chinese documentation
+└─ wrangler.toml        # Cloudflare config (not committed)
 ```
 
-## Security Notes 🛡️
-
-- `wrangler.toml` contains sensitive `database_id` - excluded from git
-- All secrets must be set via `wrangler secret put`
-- Rate limiting is enforced on image upload endpoint
-- Session tokens are validated against D1 database on each request
-V2
+> **Note**: `wrangler.toml` contains infrastructure bindings and is excluded from git. Configure via environment variables or `wrangler secret put`.

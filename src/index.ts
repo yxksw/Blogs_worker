@@ -71,6 +71,7 @@ type Env = {
 	BASE_URL?: string;
 	TURNSTILE_SECRET_KEY?: string;
 	DEV?: boolean;
+	ADMIN_EMAILS?: string;
 };
 
 type SessionRow = {
@@ -220,6 +221,24 @@ export default {
 					break;
 				case 'POST /api/contact':
 					response = await handleContact(request, env);
+					break;
+				case 'GET /api/admin/stats':
+					response = await handleAdminStats(request, env);
+					break;
+				case 'GET /api/admin/comments':
+					response = await handleAdminComments(request, env);
+					break;
+				case 'POST /api/admin/comment/approve':
+					response = await handleAdminCommentAction(request, env, 'approve');
+					break;
+				case 'POST /api/admin/comment/reject':
+					response = await handleAdminCommentAction(request, env, 'reject');
+					break;
+				case 'DELETE /api/admin/comment':
+					response = await handleAdminCommentDelete(request, env);
+					break;
+				case 'GET /api/admin/check':
+					response = await handleAdminCheck(request, env);
 					break;
 				default:
 					response = json({ error: 'Not Found' }, 404);
@@ -1249,7 +1268,104 @@ async function handleContact(request: Request, env: Env): Promise<Response> {
 	return json({ ok: true, message: 'Message sent successfully' });
 }
 
-// Development-only mock login (only works in local dev)
+// ============================================
+// Admin Handlers
+// ============================================
+
+async function adminAuth(request: Request, env: Env): Promise<{ authorized: boolean; email: string | null }> {
+	// Cloudflare Access is the ONLY source of truth for admin authorization
+	const cfEmail = request.headers.get('CF-Access-Authenticated-User-Email');
+
+	// CF Access email is required
+	if (!cfEmail) {
+		return { authorized: false, email: null };
+	}
+
+	// Check against admin whitelist
+	const adminList = (env.ADMIN_EMAILS || '')
+		.split(',')
+		.map(e => e.trim().toLowerCase())
+		.filter(Boolean);
+
+	return {
+		authorized: adminList.includes(cfEmail.toLowerCase()),
+		email: cfEmail
+	};
+}
+
+async function handleAdminStats(request: Request, env: Env): Promise<Response> {
+	const auth = await adminAuth(request, env);
+	if (!auth.authorized) return json({ error: 'Unauthorized' }, 403);
+
+	const total = await env.DB.prepare('SELECT COUNT(*) as count FROM comments').first<{ count: number }>();
+	const pending = await env.DB.prepare("SELECT COUNT(*) as count FROM comments WHERE status = 'pending'").first<{ count: number }>();
+	const approved = await env.DB.prepare("SELECT COUNT(*) as count FROM comments WHERE status = 'approved'").first<{ count: number }>();
+	const rejected = await env.DB.prepare("SELECT COUNT(*) as count FROM comments WHERE status = 'rejected'").first<{ count: number }>();
+
+	return json({
+		total: total?.count ?? 0,
+		pending: pending?.count ?? 0,
+		approved: approved?.count ?? 0,
+		rejected: rejected?.count ?? 0,
+	});
+}
+
+async function handleAdminComments(request: Request, env: Env): Promise<Response> {
+	const auth = await adminAuth(request, env);
+	if (!auth.authorized) return json({ error: 'Unauthorized' }, 403);
+
+	const url = new URL(request.url);
+	const status = url.searchParams.get('status');
+
+	let query = `SELECT c.id, c.post_slug, c.body, c.status, c.created_at, c.updated_at,
+                        u.login, u.name, u.avatar_url
+                 FROM comments c
+                 JOIN users u ON c.user_id = u.id`;
+	const bindings: string[] = [];
+
+	if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+		query += ' WHERE c.status = ?';
+		bindings.push(status);
+	}
+	query += ' ORDER BY c.created_at DESC LIMIT 100';
+
+	const result = await env.DB.prepare(query).bind(...bindings).all();
+	return json({ comments: result.results });
+}
+
+async function handleAdminCommentAction(request: Request, env: Env, action: 'approve' | 'reject'): Promise<Response> {
+	const auth = await adminAuth(request, env);
+	if (!auth.authorized) return json({ error: 'Unauthorized' }, 403);
+
+	const { id } = await request.json() as { id?: string };
+	if (!id) return json({ error: 'Missing id' }, 400);
+
+	const newStatus = action === 'approve' ? 'approved' : 'rejected';
+	const result = await env.DB.prepare(
+		"UPDATE comments SET status = ?, updated_at = ? WHERE id = ?"
+	).bind(newStatus, Date.now(), id).run();
+
+	return json({ success: true, changes: result.meta?.changes ?? 0 });
+}
+
+async function handleAdminCommentDelete(request: Request, env: Env): Promise<Response> {
+	const auth = await adminAuth(request, env);
+	if (!auth.authorized) return json({ error: 'Unauthorized' }, 403);
+
+	const url = new URL(request.url);
+	const id = url.searchParams.get('id');
+	if (!id) return json({ error: 'Missing id' }, 400);
+
+	const result = await env.DB.prepare('DELETE FROM comments WHERE id = ?').bind(id).run();
+	return json({ success: true, changes: result.meta?.changes ?? 0 });
+}
+
+async function handleAdminCheck(request: Request, env: Env): Promise<Response> {
+	const auth = await adminAuth(request, env);
+	return json({ isAdmin: auth.authorized, email: auth.email });
+}
+
+
 async function handleDevLogin(request: Request, env: Env): Promise<Response> {
 	// Development only - skip check since wrangler dev is local only
 	// In production, this endpoint won't be exposed anyway

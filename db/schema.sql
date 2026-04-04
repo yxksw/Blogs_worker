@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
 	profile_url TEXT,
 	email TEXT UNIQUE,
 	email_verified INTEGER DEFAULT 0,
+	is_admin INTEGER DEFAULT 0,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
